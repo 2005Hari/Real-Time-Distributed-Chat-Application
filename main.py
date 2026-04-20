@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="QuantumConnect Hub", version="2.0.0")
 
 # Directories
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, 'web_client')
 UPLOAD_DIR = os.path.join(WEB_DIR, 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -115,8 +115,7 @@ async def upload_file(filename: str, file: UploadFile = File(...)):
         
     return {"url": f"uploads/{unique_name}", "name": filename}
 
-# Serve the entire frontend (including index.html, JS, and uploads folder)
-app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="static")
+# UI Mount moved to bottom
 
 # --- REST API ---
 
@@ -173,6 +172,10 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Error: {e}")
         if user_id: manager.disconnect(user_id)
+
+# Serve the entire frontend (including index.html, JS, and uploads folder)
+# This MUST be at the bottom so it doesn't shadow /api or /ws routes
+app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
