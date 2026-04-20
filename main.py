@@ -50,7 +50,6 @@ class ConnectionManager:
         self.user_profiles: Dict[str, str] = {}  # user_id -> username
 
     async def connect(self, websocket: WebSocket, user_id: str, username: str):
-        await websocket.accept()
         self.active_connections[user_id] = websocket
         self.user_profiles[user_id] = username
         db.update_user_status(user_id, True)
@@ -131,6 +130,7 @@ async def get_history(limit: int = 50):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
     user_id = None
     try:
         data = await websocket.receive_text()
