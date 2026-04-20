@@ -6,9 +6,8 @@ Exposes main components for external use:
 - SQLService: Database operations handler
 """
 
-from .chat_server import ChatServer
 from .sql_service import SQLService
 from .database import init_db
 
-__all__ = ['ChatServer', 'SQLService', 'init_db']
+__all__ = ['SQLService', 'init_db']
 __version__ = '1.0.0'
