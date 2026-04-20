@@ -376,7 +376,7 @@
 
             <nav class="sidebar-nav">
                 <div class="nav-label">Workspace</div>
-                <div class="nav-item active">
+                <div class="nav-item active" onclick="switchGeneral()">
                     <span class="icon">#</span>
                     <span>General Channel</span>
                 </div>
@@ -411,7 +411,7 @@
             <header class="chat-header">
                 <div class="chat-title">
                     <span style="color: var(--text-dim);">#</span>
-                    <span>General Channel</span>
+                    <span id="chat-title-text">General Channel</span>
                     <span class="user-status" id="connection-status" style="background: var(--danger); box-shadow: 0 0 10px var(--danger);"></span>
                 </div>
                 <div style="display: flex; gap: 8px;">
@@ -444,6 +444,12 @@
         let myId = null;
         let myName = "";
         let retryCount = 0;
+
+        // Chat State
+        let currentMode = "public"; // "public" or "private"
+        let currentPrivateChatId = null;
+        let currentPrivateUserName = "";
+        let chatHistories = { "public": [] };
 
         // Auto-fill server based on URL (Secure WebSockets for HTTPS)
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -526,16 +532,34 @@
                 case "welcome":
                     myId = data.user_id;
                     myName = data.username;
-                    // LOAD HISTORY
                     if (data.history) {
-                        document.getElementById('messages-list').innerHTML = "";
-                        data.history.forEach(m => appendMessage(m));
+                        chatHistories["public"] = data.history;
+                        renderCurrentChat();
                         appendSystemMessage("--- Message Archive Synchronized ---");
                     }
                     enterApp();
                     break;
                 case "public_message":
-                    appendMessage(data);
+                    chatHistories["public"].push(data);
+                    if (currentMode === "public") appendMessage(data);
+                    else appendSystemMessage(`New message in General Channel from ${data.sender}`);
+                    break;
+                case "private_message":
+                    const pid = data.chat_id;
+                    if (!chatHistories[pid]) chatHistories[pid] = [];
+                    chatHistories[pid].push(data);
+                    if (currentMode === "private" && currentPrivateChatId === pid) appendMessage(data);
+                    else appendSystemMessage(`New secure message from ${data.sender}`);
+                    break;
+                case "private_chat_start":
+                    currentMode = "private";
+                    currentPrivateChatId = data.chat_id;
+                    currentPrivateUserName = data.other_user;
+                    if (!chatHistories[data.chat_id]) chatHistories[data.chat_id] = [];
+                    
+                    document.getElementById('chat-title-text').textContent = "Secure Channel: " + currentPrivateUserName;
+                    renderCurrentChat();
+                    appendSystemMessage("--- Secure WebSocket Established with " + currentPrivateUserName + " ---");
                     break;
                 case "user_list":
                     updateUserList(data.users);
@@ -563,13 +587,34 @@
             const input = document.getElementById('msg-input');
             if (!input.value.trim()) return;
 
-            const msg = {
-                type: "public_message",
-                content: input.value.trim()
-            };
-
-            ws.send(JSON.stringify(msg));
+            if (currentMode === "public") {
+                ws.send(JSON.stringify({ type: "public_message", content: input.value.trim() }));
+            } else {
+                ws.send(JSON.stringify({ type: "private_message", chat_id: currentPrivateChatId, content: input.value.trim() }));
+            }
             input.value = "";
+        }
+
+        function switchGeneral() {
+            currentMode = "public";
+            currentPrivateChatId = null;
+            document.getElementById('chat-title-text').textContent = "General Channel";
+            renderCurrentChat();
+            appendSystemMessage("--- Switched to General Channel ---");
+        }
+
+        function startPrivateChat(username) {
+            if (username === myName) return;
+            ws.send(JSON.stringify({ type: "private_request", recipient: username }));
+            appendSystemMessage(`Requesting handshake with ${username}...`);
+        }
+
+        function renderCurrentChat() {
+            const list = document.getElementById('messages-list');
+            list.innerHTML = "";
+            const targetId = currentMode === "public" ? "public" : currentPrivateChatId;
+            const history = chatHistories[targetId] || [];
+            history.forEach(m => appendMessage(m));
         }
 
         function appendMessage(data, isOwn = false) {
@@ -646,8 +691,9 @@
             users.forEach(u => {
                 const div = document.createElement('div');
                 div.className = "nav-item";
+                div.onclick = () => startPrivateChat(u.username);
                 div.innerHTML = `
-                    <div class="user-avatar" style="width: 24px; height: 24px; font-size: 10px;">${u.username.charAt(0).toUpperCase()}</div>
+                    <div class="user-avatar" style="width: 24px; height: 24px; font-size: 10px; background: ${getHSL(u.username)}">${u.username.charAt(0).toUpperCase()}</div>
                     <span style="font-size: 13px;">${u.username}</span>
                     ${u.user_id !== myId ? '<div class="user-status" style="margin-left: auto; width: 6px; height: 6px;"></div>' : ''}
                 `;
@@ -677,7 +723,11 @@
                 else if (file.type.startsWith("video/")) typeStr = "video";
 
                 const encoded = `__FILE__${typeStr}|_|${data.url}|_|${data.name}|_|`;
-                ws.send(JSON.stringify({ type: "public_message", content: encoded }));
+                if (currentMode === "public") {
+                    ws.send(JSON.stringify({ type: "public_message", content: encoded }));
+                } else {
+                    ws.send(JSON.stringify({ type: "private_message", chat_id: currentPrivateChatId, content: encoded }));
+                }
             } catch (e) {
                 appendSystemMessage("Upload failed.");
             }
