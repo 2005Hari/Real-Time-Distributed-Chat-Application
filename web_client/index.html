@@ -567,15 +567,6 @@
             };
 
             ws.send(JSON.stringify(msg));
-            
-            // Optimistic render for own message
-            appendMessage({
-                sender: myName,
-                sender_id: myId,
-                content: input.value.trim(),
-                timestamp: new Date().toISOString()
-            }, true);
-
             input.value = "";
         }
 
@@ -610,6 +601,7 @@
         }
 
         function parseContent(content) {
+            if (!content) return "";
             if (content.startsWith('__FILE__')) {
                 const parts = content.split('|_|');
                 if (parts.length >= 4) {
@@ -619,28 +611,13 @@
                     const caption = parts[3];
 
                     if (type === 'image') {
-                        return `
-                            <div class="media-container">
-                                ${caption ? `<p style="margin-bottom:8px">${caption}</p>` : ''}
-                                <img src="${url}" style="max-width: 100%; border-radius: 12px; cursor: pointer; border: 1px solid var(--border);" onclick="window.open('${url}')">
-                            </div>
-                        `;
+                        return `<div class="media-container" style="margin-top: 5px;">${caption ? `<p style="margin-bottom:8px">${caption}</p>` : ''}<img src="${url}" onload="const el = document.getElementById('messages-list'); el.scrollTop = el.scrollHeight;" style="max-width: 100%; max-height: 250px; border-radius: 12px; cursor: pointer; border: 1px solid var(--border);" onclick="window.open('${url}')"></div>`;
                     } else if (type === 'audio') {
-                        return `
-                            <div class="media-container">
-                                <audio controls src="${url}" style="width: 220px; height: 32px;"></audio>
-                            </div>
-                        `;
+                        return `<div class="media-container" style="margin-top: 5px;"><audio controls src="${url}" style="width: 220px; height: 32px;"></audio></div>`;
+                    } else if (type === 'video') {
+                        return `<div class="media-container" style="margin-top: 5px;"><video controls src="${url}" style="max-width: 100%; max-height: 250px; border-radius: 12px;"></video></div>`;
                     } else {
-                        return `
-                            <a href="${url}" download="${name}" style="display: flex; align-items: center; gap: 10px; text-decoration: none; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 10px; border: 1px solid var(--border); color: white;">
-                                <span style="font-size: 24px;">📄</span>
-                                <div style="display: flex; flex-direction: column; min-width: 0;">
-                                    <span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;">${name}</span>
-                                    <span style="font-size: 10px; color: var(--text-dim);">Download File</span>
-                                </div>
-                            </a>
-                        `;
+                        return `<a href="${url}" download="${name}" style="display: flex; align-items: center; gap: 10px; text-decoration: none; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 10px; border: 1px solid var(--border); color: white; margin-top: 5px;"><span style="font-size: 24px;">📄</span><div style="display: flex; flex-direction: column; min-width: 0;"><span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;">${name}</span><span style="font-size: 10px; color: var(--text-dim);">Download File</span></div></a>`;
                     }
                 }
             }
@@ -690,14 +667,15 @@
                 });
                 if (!res.ok) throw new Error("Upload failed");
                 const data = await res.json();
-                const encoded = `__FILE__file|_|${data.url}|_|${data.name}|_|`;
+                
+                // Properly detect type for UI rendering
+                let typeStr = "file";
+                if (file.type.startsWith("image/")) typeStr = "image";
+                else if (file.type.startsWith("audio/")) typeStr = "audio";
+                else if (file.type.startsWith("video/")) typeStr = "video";
+
+                const encoded = `__FILE__${typeStr}|_|${data.url}|_|${data.name}|_|`;
                 ws.send(JSON.stringify({ type: "public_message", content: encoded }));
-                appendMessage({
-                    sender: myName,
-                    sender_id: myId,
-                    content: encoded,
-                    timestamp: new Date().toISOString()
-                }, true);
             } catch (e) {
                 appendSystemMessage("Upload failed.");
             }

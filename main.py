@@ -98,6 +98,49 @@ class ConnectionManager:
             "users": users
         })
 
+    async def handle_private_message(self, sender_id: str, message: dict):
+        chat_id = message.get('chat_id')
+        content = message.get('content', '').strip()
+        
+        if not chat_id or not content: return
+            
+        participants = db.get_chat_participants(chat_id)
+        if not participants or sender_id not in participants: return
+
+        message_id = db.post_private_message(chat_id, sender_id, content)
+        if message_id:
+            recipient_id = participants[0] if participants[1] == sender_id else participants[1]
+            if recipient_id in self.active_connections:
+                await self.active_connections[recipient_id].send_json({
+                    "type": "private_message",
+                    "chat_id": chat_id,
+                    "sender": self.user_profiles[sender_id],
+                    "sender_id": sender_id,
+                    "content": content,
+                    "timestamp": datetime.now().isoformat()
+                })
+
+    async def handle_private_request(self, sender_id: str, message: dict):
+        recipient_username = message.get('recipient', '').strip()
+        if not recipient_username: return
+            
+        recipient_id = next((uid for uid, name in self.user_profiles.items() if name == recipient_username), None)
+        if not recipient_id or recipient_id == sender_id: return
+
+        chat_id = db.get_or_create_private_chat(sender_id, recipient_id)
+        if chat_id:
+            for uid in [sender_id, recipient_id]:
+                if uid in self.active_connections:
+                    other_uid = recipient_id if uid == sender_id else sender_id
+                    other_user = self.user_profiles[other_uid]
+                    await self.active_connections[uid].send_json({
+                        "type": "private_chat_start",
+                        "chat_id": chat_id,
+                        "other_user": other_user,
+                        "other_user_id": other_uid,
+                        "timestamp": datetime.now().isoformat()
+                    })
+
 manager = ConnectionManager()
 
 # --- WEB & FILE ENDPOINTS ---
@@ -157,6 +200,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 db.post_public_message(user_id, content)
                 
                 # Broadcast to others
+                # Notice we do NOT exclude sender here natively in earlier code, but we should fix duplicate render
                 await manager.broadcast({
                     "type": "public_message",
                     "sender": username,
@@ -164,6 +208,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     "content": content,
                     "timestamp": datetime.now().isoformat()
                 })
+            
+            elif message_data.get("type") == "private_message":
+                await manager.handle_private_message(user_id, message_data)
+                
+            elif message_data.get("type") == "private_request":
+                await manager.handle_private_request(user_id, message_data)
 
     except WebSocketDisconnect:
         if user_id:
