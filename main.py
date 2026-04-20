@@ -184,8 +184,15 @@ async def websocket_endpoint(websocket: WebSocket):
             return
 
         username = reg_data.get("username", "Internal User")
-        user_id = reg_data.get("user_id", str(uuid.uuid4()))
         
+        # Ensure user exists in Database to prevent Foreign Key crashes
+        user_record = db.get_user_by_username(username)
+        if user_record:
+            user_id = user_record['user_id']
+        else:
+            user_id = str(uuid.uuid4())
+            db.create_user(user_id, username)
+            
         await manager.connect(websocket, user_id, username)
 
         while True:
