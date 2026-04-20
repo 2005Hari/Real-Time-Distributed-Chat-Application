@@ -443,8 +443,9 @@
         let myName = "";
         let retryCount = 0;
 
-        // Auto-fill server based on URL
-        document.getElementById('server-input').value = `ws://${window.location.host}/ws`;
+        // Auto-fill server based on URL (Secure WebSockets for HTTPS)
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        document.getElementById('server-input').value = `${protocol}//${window.location.host}/ws`;
 
         // --- WIDGET & INTEGRATION LOGIC ---
         const urlParams = new URLSearchParams(window.location.search);
