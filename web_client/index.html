@@ -681,10 +681,13 @@
             appendSystemMessage(`Uploading ${file.name}...`);
             
             try {
+                const formData = new FormData();
+                formData.append('file', file);
                 const res = await fetch(`/upload?filename=${encodeURIComponent(file.name)}`, {
                     method: 'POST',
-                    body: file
+                    body: formData
                 });
+                if (!res.ok) throw new Error("Upload failed");
                 const data = await res.json();
                 const encoded = `__FILE__file|_|${data.url}|_|${data.name}|_|`;
                 ws.send(JSON.stringify({ type: "public_message", content: encoded }));

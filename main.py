@@ -13,11 +13,7 @@ import shutil
 import aiofiles
 from datetime import datetime
 
-# Import local service
-try:
-    from .sql_service import SQLService
-except ImportError:
-    from sql_service import SQLService
+from server.sql_service import SQLService
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -107,10 +103,6 @@ manager = ConnectionManager()
 
 # --- WEB & FILE ENDPOINTS ---
 
-@app.get("/")
-async def get_index():
-    return FileResponse(os.path.join(WEB_DIR, 'index.html'))
-
 @app.post("/upload")
 async def upload_file(filename: str, file: UploadFile = File(...)):
     ext = os.path.splitext(filename)[1]
@@ -123,8 +115,8 @@ async def upload_file(filename: str, file: UploadFile = File(...)):
         
     return {"url": f"uploads/{unique_name}", "name": filename}
 
-# Serve static uploads
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+# Serve the entire frontend (including index.html, JS, and uploads folder)
+app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="static")
 
 # --- REST API ---
 
