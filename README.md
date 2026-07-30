@@ -76,6 +76,40 @@ You can open multiple GUI clients to simulate different users.
   - Examples: `CHAT_ENV=production`, `CHAT_ENV=testing`
 - Database is a local SQLite file `chatroom.db` (auto-created). It is excluded from Git.
 
+## Deployment (Render backend + Vercel frontend)
+
+### 1) Deploy backend on Render
+
+- Create a new **Web Service** from this repository.
+- Use:
+  - Build command: `pip install -r requirements.txt`
+  - Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+  - Environment variable: `CHAT_ENV=production`
+- Verify:
+  - `https://<render-service>.onrender.com/health`
+  - WebSocket URL: `wss://<render-service>.onrender.com/ws`
+
+### 2) Deploy frontend on Vercel
+
+- Deploy the `web_client` folder as a static site.
+- Entry point: `index.html`
+
+### 3) Connect frontend to backend
+
+- The web client supports setting backend base URL in either:
+  - Query param: `?backend=https://<render-service>.onrender.com`
+  - Global variable before app script runs:
+    - `window.CHAT_BACKEND_URL = "https://<render-service>.onrender.com"`
+- When configured, the client uses that backend for:
+  - WebSocket connection (`/ws`)
+  - File upload (`/upload`)
+  - Uploaded media URLs in chat messages
+
+### 4) Production storage note
+
+- SQLite on Render is not durable unless you configure persistent disk.
+- For production reliability, use Render persistent disk at minimum, or migrate to a managed database.
+
 ## Protocol (high level)
 
 - On connect, the client must send a registration message:
@@ -107,4 +141,3 @@ pytest -q
 
 - Do not commit secrets or local files: `.env`, `.venv/`, `chatroom.db` are ignored by Git.
 - The minimal CLI client `chat_client.py` is experimental and may not fully match the server’s latest message protocol. Prefer the GUI client.
-

@@ -451,15 +451,31 @@
         let currentPrivateUserName = "";
         let chatHistories = { "public": [] };
 
-        // Auto-fill server based on URL (Secure WebSockets for HTTPS)
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        document.getElementById('server-input').value = `${protocol}//${window.location.host}/ws`;
+        function normalizeBaseUrl(baseUrl) {
+            if (!baseUrl) return "";
+            return baseUrl.trim().replace(/\/+$/, "");
+        }
+
+        function toWebSocketUrl(baseUrl) {
+            if (!baseUrl) return "";
+            return baseUrl
+                .replace(/^https:\/\//i, "wss://")
+                .replace(/^http:\/\//i, "ws://");
+        }
 
         // --- WIDGET & INTEGRATION LOGIC ---
         const urlParams = new URLSearchParams(window.location.search);
         const isWidget = urlParams.get('widget') === 'true';
         const autoUser = urlParams.get('user');
         const accentColor = urlParams.get('accent');
+        const backendFromQuery = urlParams.get('backend');
+        const backendFromGlobal = window.CHAT_BACKEND_URL;
+        const configuredBackendBaseUrl = normalizeBaseUrl(backendFromQuery || backendFromGlobal || "");
+
+        const defaultSocketBase = configuredBackendBaseUrl
+            ? toWebSocketUrl(configuredBackendBaseUrl)
+            : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+        document.getElementById('server-input').value = `${defaultSocketBase}/ws`;
 
         if (isWidget) {
             document.body.classList.add('widget-mode');
@@ -653,7 +669,8 @@
                 const parts = content.split('|_|');
                 if (parts.length >= 4) {
                     const type = parts[0].replace('__FILE__', '');
-                    const url = window.location.origin + '/' + parts[1].replace(/^\/+/, '');
+                    const filePath = '/' + parts[1].replace(/^\/+/, '');
+                    const url = configuredBackendBaseUrl ? `${configuredBackendBaseUrl}${filePath}` : `${window.location.origin}${filePath}`;
                     const name = parts[2];
                     const caption = parts[3];
 
@@ -709,7 +726,8 @@
             try {
                 const formData = new FormData();
                 formData.append('file', file);
-                const res = await fetch(`/upload?filename=${encodeURIComponent(file.name)}`, {
+                const uploadBase = configuredBackendBaseUrl || window.location.origin;
+                const res = await fetch(`${uploadBase}/upload?filename=${encodeURIComponent(file.name)}`, {
                     method: 'POST',
                     body: formData
                 });
