@@ -152,7 +152,7 @@ class SQLService:
                 SELECT m.*, u.username as sender_name 
                 FROM public_messages m
                 JOIN users u ON m.sender_id = u.user_id
-                ORDER BY m.timestamp DESC
+                ORDER BY m.timestamp DESC, m.message_id DESC
                 LIMIT ?
             ''', (limit,))
             return [dict(row) for row in cursor.fetchall()]
@@ -231,7 +231,7 @@ class SQLService:
                 FROM private_messages m
                 JOIN users u ON m.sender_id = u.user_id
                 WHERE m.chat_id = ?
-                ORDER BY m.timestamp ASC
+                ORDER BY m.timestamp ASC, m.message_id ASC
                 LIMIT ?
             ''', (chat_id, limit))
             return [dict(row) for row in cursor.fetchall()]
@@ -245,7 +245,7 @@ class SQLService:
                 FROM private_messages m
                 JOIN users u ON m.sender_id = u.user_id
                 WHERE m.chat_id = ?
-                ORDER BY m.timestamp DESC
+                ORDER BY m.timestamp DESC, m.message_id DESC
                 LIMIT ?
             ''', (chat_id, limit))
             return [dict(row) for row in cursor.fetchall()]

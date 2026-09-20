@@ -43,7 +43,7 @@ DistributedChatApp/
 The web app is split into two independently deployed parts:
 
 ```
-frontend/   Static web UI (index.html, config.js, quantum-bridge.js, vercel.json)  -> Vercel
+frontend/   Static web UI (index.html, app.js, styles.css, config.js, vercel.json) -> Vercel
 backend/    FastAPI app: WebSocket /ws, /upload, /uploads, /health, SQLite       -> Render
 render.yaml Render Blueprint for the backend
 ```

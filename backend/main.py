@@ -1,17 +1,16 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Set, Optional
+from typing import Dict, Optional
 import json
 import logging
 import asyncio
 import os
+import re
 import uuid
-import shutil
 import aiofiles
-from datetime import datetime
+from datetime import datetime, timezone
 
 from server.sql_service import SQLService
 
@@ -19,13 +18,18 @@ from server.sql_service import SQLService
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="QuantumConnect Hub", version="2.0.0")
+app = FastAPI(title="QuantumConnect Hub", version="2.1.0")
 
 # Directories (set DATA_DIR to a persistent disk path, e.g. /var/data on Render)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.getenv('DATA_DIR', BASE_DIR)
 UPLOAD_DIR = os.path.join(DATA_DIR, 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Limits
+MAX_MESSAGE_LEN = 4000
+MAX_USERNAME_LEN = 24
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 # The frontend lives on another origin (Vercel), so list it in ALLOWED_ORIGINS as a
 # comma-separated list, e.g. "https://my-chat.vercel.app". Defaults to allow-all.
@@ -45,6 +49,28 @@ class UserProfile(BaseModel):
     user_id: str
     username: str
 
+# --- HELPERS ---
+def now_iso() -> str:
+    """Current time as an ISO-8601 UTC string (the client converts to local time)."""
+    return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+def to_iso(ts: Optional[str]) -> Optional[str]:
+    """SQLite CURRENT_TIMESTAMP is UTC 'YYYY-MM-DD HH:MM:SS'; make it explicit ISO-8601 UTC."""
+    if not ts:
+        return None
+    return ts if 'T' in ts else ts.replace(' ', 'T') + 'Z'
+
+def format_message(row: dict) -> dict:
+    return {
+        "sender": row['sender_name'],
+        "sender_id": row['sender_id'],
+        "content": row['content'],
+        "timestamp": to_iso(row['timestamp'])
+    }
+
+def clean_username(raw) -> str:
+    return " ".join(str(raw or "").split())[:MAX_USERNAME_LEN] or "Guest"
+
 # --- CONNECTION MANAGER ---
 class ConnectionManager:
     def __init__(self):
@@ -52,46 +78,60 @@ class ConnectionManager:
         self.user_profiles: Dict[str, str] = {}  # user_id -> username
 
     async def connect(self, websocket: WebSocket, user_id: str, username: str):
+        # Same account opened elsewhere (second tab, or a dead socket after a network drop):
+        # the newest connection wins and the old one is told why it was closed.
+        old = self.active_connections.get(user_id)
+        if old is not None and old is not websocket:
+            try:
+                await old.send_json({"type": "replaced"})
+                await old.close(code=4001)
+            except Exception:
+                pass
+
         self.active_connections[user_id] = websocket
         self.user_profiles[user_id] = username
         db.update_user_status(user_id, True)
-        
-        # Sync online users
-        await self.broadcast_user_list()
-        
-        # Send history + welcome
-        raw_history = db.get_public_messages(limit=50)
-        # Format history for frontend
-        history = []
-        for h in reversed(raw_history):
-            history.append({
-                "sender": h['sender_name'],
-                "sender_id": h['sender_id'],
-                "content": h['content'],
-                "timestamp": h['timestamp']
-            })
+
+        history = [format_message(h) for h in reversed(db.get_public_messages(limit=50))]
+        chats = [{
+            "chat_id": c['chat_id'],
+            "other_user": c['other_user'],
+            "other_user_id": c['other_user_id'],
+            "last_message": c['last_message'],
+            "last_message_time": to_iso(c['last_message_time'])
+        } for c in db.get_user_chats(user_id)]
 
         await websocket.send_json({
             "type": "welcome",
             "user_id": user_id,
             "username": username,
-            "history": history
+            "history": history,
+            "chats": chats
         })
+        await self.broadcast_user_list()
 
-    def disconnect(self, user_id: str):
-        if user_id in self.active_connections:
-            del self.active_connections[user_id]
-        if user_id in self.user_profiles:
-            del self.user_profiles[user_id]
+    def disconnect(self, user_id: str, websocket: WebSocket) -> bool:
+        """Remove the connection unless it was already replaced by a newer one."""
+        if self.active_connections.get(user_id) is not websocket:
+            return False
+        del self.active_connections[user_id]
+        self.user_profiles.pop(user_id, None)
         db.update_user_status(user_id, False)
+        return True
 
-    async def broadcast(self, message: dict):
-        for uid, connection in self.active_connections.items():
-            try:
-                await connection.send_json(message)
-            except:
-                # Handle ghost connections
-                pass
+    async def send_to(self, user_id: str, message: dict):
+        connection = self.active_connections.get(user_id)
+        if connection is None:
+            return
+        try:
+            await connection.send_json(message)
+        except Exception as e:
+            # Ghost connection; its own handler cleans up when the socket closes
+            logger.warning("Failed to send to %s: %r", user_id, e)
+
+    async def broadcast(self, message: dict, exclude: Optional[str] = None):
+        targets = [uid for uid in list(self.active_connections) if uid != exclude]
+        await asyncio.gather(*(self.send_to(uid, message) for uid in targets))
 
     async def broadcast_user_list(self):
         users = [{"user_id": uid, "username": name} for uid, name in self.user_profiles.items()]
@@ -100,63 +140,107 @@ class ConnectionManager:
             "users": users
         })
 
+    async def handle_public_message(self, sender_id: str, message: dict):
+        content = str(message.get('content') or '').strip()[:MAX_MESSAGE_LEN]
+        if not content:
+            return
+
+        db.post_public_message(sender_id, content)
+        await self.broadcast({
+            "type": "public_message",
+            "sender": self.user_profiles.get(sender_id, "Unknown"),
+            "sender_id": sender_id,
+            "content": content,
+            "timestamp": now_iso()
+        })
+
     async def handle_private_message(self, sender_id: str, message: dict):
         chat_id = message.get('chat_id')
-        content = message.get('content', '').strip()
-        
-        if not chat_id or not content: return
-            
-        participants = db.get_chat_participants(chat_id)
-        if not participants or sender_id not in participants: return
+        content = str(message.get('content') or '').strip()[:MAX_MESSAGE_LEN]
 
-        message_id = db.post_private_message(chat_id, sender_id, content)
-        if message_id:
-            recipient_id = participants[0] if participants[1] == sender_id else participants[1]
-            if recipient_id in self.active_connections:
-                await self.active_connections[recipient_id].send_json({
-                    "type": "private_message",
-                    "chat_id": chat_id,
-                    "sender": self.user_profiles[sender_id],
-                    "sender_id": sender_id,
-                    "content": content,
-                    "timestamp": datetime.now().isoformat()
-                })
+        if not chat_id or not content:
+            return
+
+        participants = db.get_chat_participants(chat_id)
+        if not participants or sender_id not in participants:
+            return
+
+        if not db.post_private_message(chat_id, sender_id, content):
+            return
+
+        recipient_id = participants[0] if participants[1] == sender_id else participants[1]
+        recipient = db.get_user(recipient_id)
+        payload = {
+            "type": "private_message",
+            "chat_id": chat_id,
+            "sender": self.user_profiles.get(sender_id, "Unknown"),
+            "sender_id": sender_id,
+            "recipient": recipient['username'] if recipient else "",
+            "recipient_id": recipient_id,
+            "content": content,
+            "timestamp": now_iso()
+        }
+        # Echo to the sender as well so every device/tab shows the same thread
+        await self.send_to(sender_id, payload)
+        await self.send_to(recipient_id, payload)
 
     async def handle_private_request(self, sender_id: str, message: dict):
-        recipient_username = message.get('recipient', '').strip()
-        if not recipient_username: return
-            
-        recipient_id = next((uid for uid, name in self.user_profiles.items() if name == recipient_username), None)
-        if not recipient_id or recipient_id == sender_id: return
+        recipient_username = clean_username(message.get('recipient'))
+        recipient = db.get_user_by_username(recipient_username)
+        if not recipient or recipient['user_id'] == sender_id:
+            return
 
-        chat_id = db.get_or_create_private_chat(sender_id, recipient_id)
-        if chat_id:
-            for uid in [sender_id, recipient_id]:
-                if uid in self.active_connections:
-                    other_uid = recipient_id if uid == sender_id else sender_id
-                    other_user = self.user_profiles[other_uid]
-                    await self.active_connections[uid].send_json({
-                        "type": "private_chat_start",
-                        "chat_id": chat_id,
-                        "other_user": other_user,
-                        "other_user_id": other_uid,
-                        "timestamp": datetime.now().isoformat()
-                    })
+        chat_id = db.get_or_create_private_chat(sender_id, recipient['user_id'])
+        if not chat_id:
+            await self.send_to(sender_id, {"type": "error", "message": "Could not open that conversation."})
+            return
+
+        history = [format_message(m) for m in reversed(db.get_private_messages(chat_id, limit=100))]
+        # Only the requester is switched into the chat; the other person just sees
+        # an unread conversation appear when the first message arrives.
+        await self.send_to(sender_id, {
+            "type": "private_chat_start",
+            "chat_id": chat_id,
+            "other_user": recipient['username'],
+            "other_user_id": recipient['user_id'],
+            "history": history,
+            "timestamp": now_iso()
+        })
+
+    async def handle_typing(self, sender_id: str, message: dict):
+        scope = message.get('scope')
+        payload = {
+            "type": "typing",
+            "scope": scope,
+            "sender": self.user_profiles.get(sender_id, "Unknown"),
+            "sender_id": sender_id
+        }
+        if scope == 'public':
+            await self.broadcast(payload, exclude=sender_id)
+            return
+
+        participants = db.get_chat_participants(scope) if isinstance(scope, str) else None
+        if participants and sender_id in participants:
+            other_id = participants[0] if participants[1] == sender_id else participants[1]
+            await self.send_to(other_id, payload)
 
 manager = ConnectionManager()
 
-# --- WEB & FILE ENDPOINTS ---
+# --- FILE ENDPOINTS ---
 
 @app.post("/upload")
 async def upload_file(filename: str, file: UploadFile = File(...)):
-    ext = os.path.splitext(filename)[1]
+    ext = re.sub(r'[^A-Za-z0-9.]', '', os.path.splitext(filename)[1])[:10]
     unique_name = f"{uuid.uuid4()}{ext}"
     filepath = os.path.join(UPLOAD_DIR, unique_name)
-    
+
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
+
     async with aiofiles.open(filepath, 'wb') as out_file:
-        content = await file.read()
         await out_file.write(content)
-        
+
     return {"url": f"uploads/{unique_name}", "name": filename}
 
 # --- REST API ---
@@ -182,13 +266,13 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         data = await websocket.receive_text()
         reg_data = json.loads(data)
-        
-        if reg_data.get("type") != "register":
+
+        if not isinstance(reg_data, dict) or reg_data.get("type") != "register":
             await websocket.close(code=4000)
             return
 
-        username = reg_data.get("username", "Internal User")
-        
+        username = clean_username(reg_data.get("username"))
+
         # Ensure user exists in Database to prevent Foreign Key crashes
         user_record = db.get_user_by_username(username)
         if user_record:
@@ -196,43 +280,43 @@ async def websocket_endpoint(websocket: WebSocket):
         else:
             user_id = str(uuid.uuid4())
             db.create_user(user_id, username)
-            
+
         await manager.connect(websocket, user_id, username)
 
         while True:
             data = await websocket.receive_text()
-            message_data = json.loads(data)
-            
-            if message_data.get("type") == "public_message":
-                content = message_data.get("content")
-                if not content: continue
-                
-                # Save to DB
-                db.post_public_message(user_id, content)
-                
-                # Broadcast to others
-                # Notice we do NOT exclude sender here natively in earlier code, but we should fix duplicate render
-                await manager.broadcast({
-                    "type": "public_message",
-                    "sender": username,
-                    "sender_id": user_id,
-                    "content": content,
-                    "timestamp": datetime.now().isoformat()
-                })
-            
-            elif message_data.get("type") == "private_message":
-                await manager.handle_private_message(user_id, message_data)
-                
-            elif message_data.get("type") == "private_request":
-                await manager.handle_private_request(user_id, message_data)
+            try:
+                message_data = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(message_data, dict):
+                continue
+
+            try:
+                message_type = message_data.get("type")
+                if message_type == "public_message":
+                    await manager.handle_public_message(user_id, message_data)
+                elif message_type == "private_message":
+                    await manager.handle_private_message(user_id, message_data)
+                elif message_type == "private_request":
+                    await manager.handle_private_request(user_id, message_data)
+                elif message_type == "typing":
+                    await manager.handle_typing(user_id, message_data)
+                elif message_type == "ping":
+                    await websocket.send_json({"type": "pong"})
+            except WebSocketDisconnect:
+                raise
+            except Exception:
+                # One bad message must not drop the connection
+                logger.exception("Error handling %s message", message_data.get("type"))
 
     except WebSocketDisconnect:
-        if user_id:
-            manager.disconnect(user_id)
-            await manager.broadcast_user_list()
+        pass
     except Exception as e:
         logger.error(f"Error: {e}")
-        if user_id: manager.disconnect(user_id)
+    finally:
+        if user_id and manager.disconnect(user_id, websocket):
+            await manager.broadcast_user_list()
 
 # Uploaded files are served by the backend; the UI itself is hosted separately (Vercel)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
