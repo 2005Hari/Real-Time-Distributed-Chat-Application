@@ -5,7 +5,8 @@ websockets==11.0.3          # WebSocket implementation
 python-dotenv==1.0.0        # Environment management
 
 # Database Tools
-sqlalchemy==2.0.23          # Database ORM
+sqlalchemy==2.0.23         # Database toolkit (SQLite locally, PostgreSQL in production)
+psycopg2-binary==2.9.9      # PostgreSQL driver
 pydantic==2.5.2             # Data validation
 
 # Utils

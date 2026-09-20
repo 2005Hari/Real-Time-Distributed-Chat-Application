@@ -70,6 +70,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .auth-title { font-size: 28px; font-weight: 800; letter-spacing: -.03em; }
 .auth-sub { font-size: 14px; color: var(--text-dim); margin: 6px 0 28px; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin-bottom: 22px; background: var(--surface-2); border-radius: 12px; }
+.tab { padding: 9px 8px; border: 0; border-radius: 9px; background: transparent; font-size: 14px; font-weight: 600; color: var(--text-dim); transition: background .12s, color .12s; }
+.tab:hover { color: var(--text); }
+.tab.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+.auth-hint { text-align: left; font-size: 12px; line-height: 1.45; color: var(--text-dim); margin: -4px 0 14px; }
 .field { text-align: left; margin-bottom: 16px; }
 .field label { display: block; font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
 .field input {

@@ -44,38 +44,57 @@ The web app is split into two independently deployed parts:
 
 ```
 frontend/   Static web UI (index.html, app.js, styles.css, config.js, vercel.json) -> Vercel
-backend/    FastAPI app: WebSocket /ws, /upload, /uploads, /health, SQLite       -> Render
+backend/    FastAPI app: accounts, WebSocket /ws, /upload, /uploads, /health     -> Render
 render.yaml Render Blueprint for the backend
 ```
 
-### 1. Deploy the backend on Render
+### Access control
+
+Chat is private: people sign in with a username and password, and **creating an account requires an invite code**
+that you choose. Sessions are signed tokens; the WebSocket, uploads and history all require one. Usernames are
+unique ignoring case, passwords are hashed with scrypt, and login/sign-up attempts are rate limited.
+
+### 1. Create a free PostgreSQL database (Neon)
+
+Render's free filesystem is wiped on every deploy and whenever the service sleeps, so accounts and messages must
+live in an external database.
+
+1. Sign up at [neon.tech](https://neon.tech) and create a project.
+2. Copy the connection string (`postgresql://user:password@host/dbname?sslmode=require`). Tables are created
+   automatically on first start.
+
+### 2. Deploy the backend on Render
 
 1. Push this repo to GitHub, then in Render choose **New > Blueprint** and select the repo (it reads `render.yaml`).
    Creating a Web Service by hand also works: root directory `backend`, build `pip install -r requirements.txt`,
    start `uvicorn main:app --host 0.0.0.0 --port $PORT`, health check `/health`, and env var `PYTHON_VERSION=3.11.9`.
-2. Copy the service URL once it is live, e.g. `https://quantumconnect-backend.onrender.com`.
-3. After the frontend is deployed (step 2), set the `ALLOWED_ORIGINS` env var on the Render service to your Vercel URL
+2. Set the environment variables below in the Render dashboard.
+3. Copy the service URL once it is live, e.g. `https://quantumconnect-backend.onrender.com`.
+4. After the frontend is deployed (step 3), set `ALLOWED_ORIGINS` to your Vercel URL
    (comma-separated for several, no trailing slash), e.g. `https://my-chat.vercel.app`.
 
-| Env var           | Purpose                                                                 |
-| ----------------- | ----------------------------------------------------------------------- |
-| `ALLOWED_ORIGINS` | Origins allowed to call the API (CORS). Defaults to `*`.                |
-| `DATA_DIR`        | Where `chatroom.db` and `uploads/` are stored. Defaults to `backend/`.  |
-| `PORT`            | Set by Render automatically.                                            |
+| Env var           | Purpose                                                                                      |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`    | PostgreSQL connection string from step 1. Without it a local SQLite file is used (dev only). |
+| `INVITE_CODE`     | Required to create an account. If unset, anyone can register (the server logs a warning).    |
+| `SECRET_KEY`      | Signs login sessions. Use a long random string; changing it signs everyone out.              |
+| `ALLOWED_ORIGINS` | Origins allowed to call the API (CORS) and open the WebSocket. Defaults to `*`.              |
+| `DATA_DIR`        | Where uploads (and the SQLite file, if used) are stored. Defaults to `backend/`.             |
+| `PORT`            | Set by Render automatically.                                                                 |
 
-> The Render free plan has an ephemeral disk and spins down when idle: chat history and uploaded files are lost on
-> each deploy/restart, and the first connection after idle can take ~50 seconds. For persistence, use a paid plan,
-> attach a disk and set `DATA_DIR` to its mount path (see the comments in `render.yaml`).
+> The Render free plan spins down when idle, so the first connection after a pause can take ~50 seconds. Its
+> filesystem is ephemeral, so **uploaded files** are lost on each deploy/restart (accounts and messages are safe in
+> Postgres). To keep uploads, use a paid plan with a disk and set `DATA_DIR` to its mount path.
 
-### 2. Deploy the frontend on Vercel
+### 3. Deploy the frontend on Vercel
 
 1. Edit `PRODUCTION_BACKEND_URL` in `frontend/config.js` to your Render URL and commit.
 2. In Vercel, **Add New > Project**, import the repo and set **Root Directory** to `frontend`.
    Framework preset: **Other**; leave the build command and output directory empty.
-3. Deploy, then put the resulting Vercel URL into `ALLOWED_ORIGINS` on Render (step 1.3).
+3. Deploy, then put the resulting Vercel URL into `ALLOWED_ORIGINS` on Render (step 2.4).
 
-The WebSocket URL (`wss://.../ws`) is derived from that backend URL. Users can still override it in the
-"Server Node" field on the login screen.
+The WebSocket URL (`wss://.../ws`) is derived from that backend URL. It can be changed under **Advanced** on the
+sign-in form. Share the site link and the invite code with the people you want in the chat.
 
 ### Run the web app locally
 
@@ -90,7 +109,10 @@ cd frontend
 python -m http.server 3000
 ```
 
-`config.js` automatically targets `http://localhost:8000` when the page is opened from `localhost`.
+`config.js` automatically targets `http://localhost:8000` when the page is opened from `localhost`. Locally the
+backend uses a SQLite file and, with no `INVITE_CODE` set, lets you create accounts freely. To develop against
+PostgreSQL, set `DATABASE_URL`. Run the tests with `pytest test/test_auth.py` (set `TEST_DATABASE_URL` to run them
+on PostgreSQL).
 
 ## Quick Start (desktop client)
 

@@ -23,6 +23,8 @@
     const el = {
         authScreen: $('auth-screen'), authForm: $('auth-form'), authBtn: $('auth-btn'),
         authNote: $('auth-note'), authError: $('auth-error'), username: $('username-input'), server: $('server-input'),
+        password: $('password-input'), invite: $('invite-input'), inviteField: $('invite-field'), authHint: $('auth-hint'),
+        tabLogin: $('tab-login'), tabRegister: $('tab-register'),
         mainApp: $('main-app'), scrim: $('scrim'), menuBtn: $('menu-btn'),
         navPublic: $('nav-public'), badgePublic: $('badge-public'), dmList: $('dm-list'),
         onlineList: $('online-list'), onlineCount: $('online-count'),
@@ -42,7 +44,8 @@
 
     const store = {
         get(key) { try { return localStorage.getItem(key); } catch { return null; } },
-        set(key, value) { try { localStorage.setItem(key, value); } catch { /* storage unavailable */ } }
+        set(key, value) { try { localStorage.setItem(key, value); } catch { /* storage unavailable */ } },
+        remove(key) { try { localStorage.removeItem(key); } catch { /* storage unavailable */ } }
     };
 
     const hue = (name) => {
@@ -96,6 +99,7 @@
         status: 'idle',            // idle | connecting | open | reconnecting | replaced
         everOpened: false,
         name: '', myId: null,
+        token: store.get('qc_token') || null,   // signed session token issued by /api/login or /api/register
         convs: new Map([[PUBLIC, publicConv()]]),
         active: PUBLIC,
         online: [],                // [{user_id, username}]
@@ -116,11 +120,28 @@
     }
 
     // ---------- sign-in ----------
+    let authMode = 'login';   // 'login' | 'register'
+
     const authNote = (text) => { el.authNote.textContent = text; };
     const authError = (text) => { el.authError.textContent = text; };
     function authBusy(busy) {
         el.authBtn.disabled = busy;
-        el.authBtn.textContent = busy ? 'Connecting…' : 'Join chat';
+        el.authBtn.textContent = busy ? 'Please wait…' : (authMode === 'register' ? 'Create account' : 'Sign in');
+    }
+
+    function setAuthMode(mode) {
+        authMode = mode;
+        const register = mode === 'register';
+        el.tabLogin.classList.toggle('active', !register);
+        el.tabRegister.classList.toggle('active', register);
+        el.tabLogin.setAttribute('aria-selected', String(!register));
+        el.tabRegister.setAttribute('aria-selected', String(register));
+        el.inviteField.hidden = !register;
+        el.authHint.hidden = !register;
+        el.password.autocomplete = register ? 'new-password' : 'current-password';
+        el.password.placeholder = register ? 'At least 8 characters' : 'Your password';
+        authError('');
+        authBusy(false);
     }
     function authFail(text) {
         authBusy(false);
@@ -139,25 +160,63 @@
         finally { clearTimeout(timer); }
     }
 
-    async function startSession() {
-        const name = el.username.value.replace(/\s+/g, ' ').trim();
-        if (!name) return authError('Please enter a display name.');
-
-        state.name = name;
-        store.set('qc_name', name);
+    // Point at the chosen backend and wake it up if it is asleep (shows progress on the sign-in card)
+    async function prepareConnection(message) {
         state.wsUrl = normalizeWs(el.server.value || CFG.WS_URL);
         state.apiBase = wsToHttp(state.wsUrl);
-
         authError('');
         authBusy(true);
-        authNote('Connecting…');
+        authNote(message);
         const slow = setTimeout(() => authNote('Waking up the server. Free hosting can take up to a minute…'), 3000);
         await wakeServer();
         clearTimeout(slow);
+    }
 
+    function connectSocket() {
         state.status = 'connecting';
         state.everOpened = false;
         openSocket();
+    }
+
+    const errorText = (res, data) => typeof data.detail === 'string' ? data.detail :
+        res.status === 422 ? 'Please check what you entered.' : 'Something went wrong. Please try again.';
+
+    async function submitAuth() {
+        const username = el.username.value.replace(/\s+/g, ' ').trim();
+        const password = el.password.value;
+        if (!username || !password) return authError('Enter your username and password.');
+
+        await prepareConnection('Connecting…');
+
+        let res, data;
+        try {
+            res = await fetch(`${state.apiBase}/api/${authMode}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username, password,
+                    invite_code: authMode === 'register' ? el.invite.value.trim() : undefined
+                })
+            });
+            data = await res.json().catch(() => ({}));
+        } catch {
+            return authFail('Could not reach the server. Check your connection and try again.');
+        }
+        if (!res.ok) return authFail(errorText(res, data));
+
+        state.token = data.token;
+        state.name = data.username;
+        store.set('qc_token', data.token);
+        store.set('qc_name', data.username);
+        el.password.value = '';
+        el.invite.value = '';
+        connectSocket();
+    }
+
+    // A saved token lets a returning user skip the form
+    async function resumeSession() {
+        await prepareConnection('Signing you in…');
+        connectSocket();
     }
 
     function enterApp() {
@@ -174,6 +233,8 @@
 
     function signOut() {
         state.status = 'idle';
+        state.token = null;
+        store.remove('qc_token');
         stopHeartbeat();
         clearTimeout(state.retryTimer);
         if (state.ws) { try { state.ws.close(1000); } catch { /* already closed */ } state.ws = null; }
@@ -182,10 +243,17 @@
         el.mainApp.classList.remove('visible');
         el.authScreen.style.display = 'flex';
         requestAnimationFrame(() => el.authScreen.classList.remove('leaving'));
-        authBusy(false);
+        el.password.value = '';
+        setAuthMode('login');
         authNote('');
-        authError('');
-        el.username.focus();
+        el.username.value = store.get('qc_name') || '';
+        (el.username.value ? el.password : el.username).focus();
+    }
+
+    // The server rejected our session (expired, or the account is gone): back to the sign-in form
+    function forceSignOut(message) {
+        signOut();
+        authError(message || 'Please sign in again.');
     }
 
     // ---------- socket lifecycle ----------
@@ -201,21 +269,22 @@
         }
         state.ws = ws;
 
-        ws.onopen = () => ws.send(JSON.stringify({ type: 'register', username: state.name }));
+        ws.onopen = () => ws.send(JSON.stringify({ type: 'register', token: state.token }));
         ws.onmessage = (event) => {
             state.lastRx = Date.now();
             let data;
             try { data = JSON.parse(event.data); } catch { return; }
             handleProtocol(data);
         };
-        ws.onclose = () => onSocketClosed(ws);
+        ws.onclose = (event) => onSocketClosed(ws, event);
         ws.onerror = () => { /* onclose follows and handles it */ };
     }
 
-    function onSocketClosed(ws) {
+    function onSocketClosed(ws, event) {
         if (ws !== state.ws) return;                       // a newer socket already replaced this one
         stopHeartbeat();
         if (state.status === 'idle' || state.status === 'replaced') return;
+        if (event && event.code === 4403) return authFail('This site is not allowed to use that server.');
         if (!state.everOpened) return authFail('Could not reach the server. Check the address and try again.');
         scheduleReconnect();
     }
@@ -271,6 +340,8 @@
                 state.status = 'replaced';
                 stopHeartbeat();
                 return renderConnection();
+            case 'auth_error':
+                return forceSignOut(data.message);
             case 'error':
                 return toast(data.message || 'Something went wrong.');
             default: // pong and unknown frames only refresh lastRx
@@ -533,12 +604,14 @@
 
         const xhr = new XMLHttpRequest();
         xhr.open('POST', `${state.apiBase}/upload?filename=${encodeURIComponent(file.name)}`);
+        xhr.setRequestHeader('Authorization', `Bearer ${state.token}`);
         xhr.upload.onprogress = (e) => {
             if (e.lengthComputable) pill.textContent = `Uploading ${label} ${Math.round((e.loaded / e.total) * 100)}%`;
         };
         xhr.onerror = () => { pill.remove(); toast('Upload failed. Check your connection.'); };
         xhr.onload = () => {
             pill.remove();
+            if (xhr.status === 401) return forceSignOut('Your session has expired. Please sign in again.');
             if (xhr.status === 413) return toast('That file is too large (max 10 MB).');
             if (xhr.status !== 200) return toast('Upload failed.');
             try {
@@ -691,7 +764,9 @@
     });
 
     // ---------- wiring ----------
-    el.authForm.addEventListener('submit', (e) => { e.preventDefault(); startSession(); });
+    el.authForm.addEventListener('submit', (e) => { e.preventDefault(); submitAuth(); });
+    el.tabLogin.addEventListener('click', () => setAuthMode('login'));
+    el.tabRegister.addEventListener('click', () => setAuthMode('register'));
     el.signout.addEventListener('click', signOut);
     el.bannerBtn.addEventListener('click', reconnectNow);
 
@@ -706,12 +781,15 @@
 
     // ---------- embedding (quantum-bridge.js) ----------
     const params = new URLSearchParams(location.search);
-    if (params.get('widget') === 'true') {
+    const isWidget = params.get('widget') === 'true';
+    if (isWidget) {
         document.body.classList.add('widget-mode');
         const accent = params.get('accent');
         if (accent) document.documentElement.style.setProperty('--accent', accent);
     }
     window.addEventListener('message', (event) => {
+        // Only the embedding page may drive the widget, and only when signed in
+        if (!isWidget || event.source !== window.parent || !isOpen()) return;
         if (event.data && event.data.type === 'SEND_MSG' && event.data.text) {
             sendToConv(activeConv(), String(event.data.text).slice(0, 4000));
         }
@@ -719,8 +797,9 @@
 
     // ---------- init ----------
     el.server.value = CFG.WS_URL;
-    el.username.value = params.get('user') || store.get('qc_name') || '';
+    el.username.value = params.get('user') || store.get('qc_name') || '';   // ?user= only pre-fills the form
+    setAuthMode('login');
     renderSidebar();
     renderConnection();
-    if (params.get('user')) startSession();
+    if (state.token) resumeSession();
 })();

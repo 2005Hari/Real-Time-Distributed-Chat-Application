@@ -18,12 +18,26 @@
         <form class="auth-card" id="auth-form" autocomplete="off">
             <div class="logo logo-lg">QC</div>
             <h1 class="auth-title">QuantumConnect</h1>
-            <p class="auth-sub">Real-time team chat</p>
+            <p class="auth-sub">Private team chat</p>
+
+            <div class="tabs" role="tablist">
+                <button type="button" role="tab" class="tab active" id="tab-login" aria-selected="true">Sign in</button>
+                <button type="button" role="tab" class="tab" id="tab-register" aria-selected="false">Create account</button>
+            </div>
 
             <div class="field">
-                <label for="username-input">Display name</label>
-                <input type="text" id="username-input" placeholder="e.g. Alex Rivera" maxlength="24" required autofocus>
+                <label for="username-input">Username</label>
+                <input type="text" id="username-input" name="username" placeholder="e.g. alex.rivera" maxlength="24" autocomplete="username" spellcheck="false" required autofocus>
             </div>
+            <div class="field">
+                <label for="password-input">Password</label>
+                <input type="password" id="password-input" name="password" placeholder="At least 8 characters" maxlength="128" autocomplete="current-password" required>
+            </div>
+            <div class="field" id="invite-field" hidden>
+                <label for="invite-input">Invite code</label>
+                <input type="text" id="invite-input" name="invite" placeholder="Ask whoever invited you" maxlength="128" autocomplete="off" spellcheck="false">
+            </div>
+            <p class="auth-hint" id="auth-hint" hidden>Usernames are 3-24 characters: letters, numbers, spaces, dots, dashes or underscores.</p>
 
             <details class="advanced">
                 <summary>Advanced</summary>
@@ -33,7 +47,7 @@
                 </div>
             </details>
 
-            <button type="submit" class="btn-primary" id="auth-btn">Join chat</button>
+            <button type="submit" class="btn-primary" id="auth-btn">Sign in</button>
             <div id="auth-note" class="auth-note" role="status"></div>
             <div id="auth-error" class="auth-error" role="alert"></div>
         </form>

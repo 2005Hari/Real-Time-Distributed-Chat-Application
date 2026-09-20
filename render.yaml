@@ -15,11 +15,13 @@ services:
       # Your Vercel URL(s), comma-separated, no trailing slash. Set this in the Render dashboard.
       - key: ALLOWED_ORIGINS
         sync: false
-      # The free plan has an ephemeral filesystem: chat history (SQLite) and uploads reset on every
-      # deploy/restart. To keep them, use a paid plan, add a disk below, and set DATA_DIR to its mount path:
-      #   disk:
-      #     name: chat-data
-      #     mountPath: /var/data
-      #     sizeGB: 1
-      # - key: DATA_DIR
-      #   value: /var/data
+      # Required to create an account. Share it only with the people you want in the chat.
+      - key: INVITE_CODE
+        sync: false
+      # Signs login sessions. Generated once by Render and kept across deploys.
+      - key: SECRET_KEY
+        generateValue: true
+      # PostgreSQL connection string (e.g. from Neon or Supabase). Render's free filesystem is wiped on
+      # every deploy/restart, so accounts and history must live in an external database.
+      - key: DATABASE_URL
+        sync: false
