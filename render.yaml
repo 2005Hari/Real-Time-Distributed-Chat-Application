@@ -1,0 +1,25 @@
+# Render Blueprint for the backend (FastAPI + WebSocket). The frontend is deployed separately on Vercel.
+services:
+  - type: web
+    name: quantumconnect-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Pinned because the dependency versions in requirements.txt have no wheels for Python 3.13+.
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Your Vercel URL(s), comma-separated, no trailing slash. Set this in the Render dashboard.
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # The free plan has an ephemeral filesystem: chat history (SQLite) and uploads reset on every
+      # deploy/restart. To keep them, use a paid plan, add a disk below, and set DATA_DIR to its mount path:
+      #   disk:
+      #     name: chat-data
+      #     mountPath: /var/data
+      #     sizeGB: 1
+      # - key: DATA_DIR
+      #   value: /var/data

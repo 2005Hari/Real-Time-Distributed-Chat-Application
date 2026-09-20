@@ -21,22 +21,24 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="QuantumConnect Hub", version="2.0.0")
 
-# Directories
+# Directories (set DATA_DIR to a persistent disk path, e.g. /var/data on Render)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-WEB_DIR = os.path.join(BASE_DIR, 'web_client')
-UPLOAD_DIR = os.path.join(WEB_DIR, 'uploads')
+DATA_DIR = os.getenv('DATA_DIR', BASE_DIR)
+UPLOAD_DIR = os.path.join(DATA_DIR, 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# Enable CORS for enterprise integration
+# The frontend lives on another origin (Vercel), so list it in ALLOWED_ORIGINS as a
+# comma-separated list, e.g. "https://my-chat.vercel.app". Defaults to allow-all.
+ALLOWED_ORIGINS = [o.strip().rstrip('/') for o in os.getenv('ALLOWED_ORIGINS', '*').split(',') if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Initialize Database
-db = SQLService(os.path.join(BASE_DIR, 'chatroom.db'))
+db = SQLService(os.path.join(DATA_DIR, 'chatroom.db'))
 
 # --- MODELS ---
 class UserProfile(BaseModel):
@@ -157,9 +159,11 @@ async def upload_file(filename: str, file: UploadFile = File(...)):
         
     return {"url": f"uploads/{unique_name}", "name": filename}
 
-# UI Mount moved to bottom
-
 # --- REST API ---
+
+@app.get("/")
+async def root():
+    return {"service": "QuantumConnect Hub", "status": "ok", "docs": "/docs"}
 
 @app.get("/health")
 async def health_check():
@@ -230,15 +234,16 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"Error: {e}")
         if user_id: manager.disconnect(user_id)
 
-# Serve the entire frontend (including index.html, JS, and uploads folder)
-# This MUST be at the bottom so it doesn't shadow /api or /ws routes
-app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="static")
+# Uploaded files are served by the backend; the UI itself is hosted separately (Vercel)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 if __name__ == "__main__":
     import uvicorn
+    port = int(os.getenv("PORT", "8000"))
     print("\n" + "="*50)
     print("  QUANTUMCONNECT ENTERPRISE HUB STARTED")
-    print("  Access the Dashboard at: http://localhost:8000")
-    print("  API Documentation at:   http://localhost:8000/docs")
+    print(f"  API + WebSocket at:   http://localhost:{port}")
+    print(f"  API Documentation at: http://localhost:{port}/docs")
+    print("  UI is served separately from ../frontend")
     print("="*50 + "\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=port)

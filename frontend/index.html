@@ -357,7 +357,7 @@
             </div>
             <div class="input-group">
                 <label>Server Node</label>
-                <input type="text" id="server-input" placeholder="ws://localhost:8888">
+                <input type="text" id="server-input" placeholder="wss://your-backend.onrender.com/ws">
             </div>
             
             <button class="btn-auth" onclick="connect()">Establish Connection</button>
@@ -439,6 +439,7 @@
         </main>
     </div>
 
+    <script src="config.js"></script>
     <script>
         let ws = null;
         let myId = null;
@@ -451,9 +452,14 @@
         let currentPrivateUserName = "";
         let chatHistories = { "public": [] };
 
-        // Auto-fill server based on URL (Secure WebSockets for HTTPS)
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        document.getElementById('server-input').value = `${protocol}//${window.location.host}/ws`;
+        // Backend is hosted separately (Render); its URL comes from config.js.
+        // apiBase is the HTTP origin used for uploads and uploaded-file links.
+        let apiBase = window.QC_CONFIG.HTTP_URL;
+        document.getElementById('server-input').value = window.QC_CONFIG.WS_URL;
+
+        function wsToHttpBase(wsUrl) {
+            return wsUrl.replace(/^ws/i, 'http').replace(/\/ws\/?$/, '').replace(/\/+$/, '');
+        }
 
         // --- WIDGET & INTEGRATION LOGIC ---
         const urlParams = new URLSearchParams(window.location.search);
@@ -499,8 +505,9 @@
 
             try {
                 // Enterprise auto-pathing: if user didn't specify /ws, add it
-                let url = serverInput.value;
+                let url = serverInput.value.trim().replace(/\/+$/, '');
                 if (!url.endsWith('/ws')) url += '/ws';
+                apiBase = wsToHttpBase(url);
                 ws = new WebSocket(url);
             } catch (e) {
                 if (errorEl) errorEl.textContent = "Connection Error: Check server path.";
@@ -653,7 +660,7 @@
                 const parts = content.split('|_|');
                 if (parts.length >= 4) {
                     const type = parts[0].replace('__FILE__', '');
-                    const url = window.location.origin + '/' + parts[1].replace(/^\/+/, '');
+                    const url = apiBase + '/' + parts[1].replace(/^\/+/, '');
                     const name = parts[2];
                     const caption = parts[3];
 
@@ -709,7 +716,7 @@
             try {
                 const formData = new FormData();
                 formData.append('file', file);
-                const res = await fetch(`/upload?filename=${encodeURIComponent(file.name)}`, {
+                const res = await fetch(`${apiBase}/upload?filename=${encodeURIComponent(file.name)}`, {
                     method: 'POST',
                     body: formData
                 });

@@ -38,7 +38,61 @@ DistributedChatApp/
 └─ .env                  # Local env (not committed)
 ```
 
-## Quick Start
+## Deployment: Vercel (frontend) + Render (backend)
+
+The web app is split into two independently deployed parts:
+
+```
+frontend/   Static web UI (index.html, config.js, quantum-bridge.js, vercel.json)  -> Vercel
+backend/    FastAPI app: WebSocket /ws, /upload, /uploads, /health, SQLite       -> Render
+render.yaml Render Blueprint for the backend
+```
+
+### 1. Deploy the backend on Render
+
+1. Push this repo to GitHub, then in Render choose **New > Blueprint** and select the repo (it reads `render.yaml`).
+   Creating a Web Service by hand also works: root directory `backend`, build `pip install -r requirements.txt`,
+   start `uvicorn main:app --host 0.0.0.0 --port $PORT`, health check `/health`, and env var `PYTHON_VERSION=3.11.9`.
+2. Copy the service URL once it is live, e.g. `https://quantumconnect-backend.onrender.com`.
+3. After the frontend is deployed (step 2), set the `ALLOWED_ORIGINS` env var on the Render service to your Vercel URL
+   (comma-separated for several, no trailing slash), e.g. `https://my-chat.vercel.app`.
+
+| Env var           | Purpose                                                                 |
+| ----------------- | ----------------------------------------------------------------------- |
+| `ALLOWED_ORIGINS` | Origins allowed to call the API (CORS). Defaults to `*`.                |
+| `DATA_DIR`        | Where `chatroom.db` and `uploads/` are stored. Defaults to `backend/`.  |
+| `PORT`            | Set by Render automatically.                                            |
+
+> The Render free plan has an ephemeral disk and spins down when idle: chat history and uploaded files are lost on
+> each deploy/restart, and the first connection after idle can take ~50 seconds. For persistence, use a paid plan,
+> attach a disk and set `DATA_DIR` to its mount path (see the comments in `render.yaml`).
+
+### 2. Deploy the frontend on Vercel
+
+1. Edit `PRODUCTION_BACKEND_URL` in `frontend/config.js` to your Render URL and commit.
+2. In Vercel, **Add New > Project**, import the repo and set **Root Directory** to `frontend`.
+   Framework preset: **Other**; leave the build command and output directory empty.
+3. Deploy, then put the resulting Vercel URL into `ALLOWED_ORIGINS` on Render (step 1.3).
+
+The WebSocket URL (`wss://.../ws`) is derived from that backend URL. Users can still override it in the
+"Server Node" field on the login screen.
+
+### Run the web app locally
+
+```
+# terminal 1: backend on http://localhost:8000
+cd backend
+pip install -r requirements.txt
+python main.py
+
+# terminal 2: frontend on http://localhost:3000
+cd frontend
+python -m http.server 3000
+```
+
+`config.js` automatically targets `http://localhost:8000` when the page is opened from `localhost`.
+
+## Quick Start (desktop client)
 
 1) Create and activate a virtual environment
 
